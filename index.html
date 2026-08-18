@@ -92,6 +92,7 @@
 <body>
 
 <div class="container">
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v4</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -151,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console</span>
+    <span>Debug Console (build 2026-08-18-v4)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -161,25 +162,52 @@
 </div>
 
 <script>
-  // --- DEBUG PANEL: captures console output + uncaught errors, no external tools needed ---
+  // --- DEBUG PANEL v4: persists across page reloads (needed because Spotify login does a full redirect) ---
   (function() {
+    const STORAGE_KEY = 'debug_log_v4';
+    const MAX_ENTRIES = 200;
     const logEl = document.getElementById('debugLog');
     const toggleBtn = document.getElementById('debugToggle');
     const originalConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
 
+    function loadEntries() {
+      try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]'); }
+      catch (e) { return []; }
+    }
+    function saveEntries(entries) {
+      try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(-MAX_ENTRIES))); }
+      catch (e) { /* storage full or unavailable, ignore */ }
+    }
+
     function formatArg(a) {
       if (a instanceof Error) return a.stack || a.message;
-      if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); } }
+      if (typeof a === 'object' && a !== null) { try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); } }
       return String(a);
     }
 
+    function renderEntry(entry) {
+      const div = document.createElement('div');
+      div.className = `debug-entry ${entry.type}`;
+      div.innerHTML = `<span class="debug-time">${entry.time}</span>${entry.msg.replace(/</g, '&lt;')}`;
+      logEl.appendChild(div);
+    }
+
+    function renderAll() {
+      logEl.innerHTML = '';
+      loadEntries().forEach(renderEntry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
     function addEntry(type, args) {
-      const entry = document.createElement('div');
-      entry.className = `debug-entry ${type}`;
-      const time = new Date().toLocaleTimeString();
-      const msg = Array.from(args).map(formatArg).join(' ');
-      entry.innerHTML = `<span class="debug-time">${time}</span>${msg.replace(/</g, '&lt;')}`;
-      logEl.appendChild(entry);
+      const entry = {
+        type,
+        time: new Date().toLocaleTimeString(),
+        msg: Array.from(args).map(formatArg).join(' ')
+      };
+      const entries = loadEntries();
+      entries.push(entry);
+      saveEntries(entries);
+      renderEntry(entry);
       logEl.scrollTop = logEl.scrollHeight;
       if (type === 'error' || type === 'warn') toggleBtn.classList.add('hasErrors');
     }
@@ -200,9 +228,14 @@
       document.getElementById('debugPanel').classList.toggle('open');
       toggleBtn.classList.remove('hasErrors');
     };
-    window.clearDebugLog = function() { logEl.innerHTML = ''; };
+    window.clearDebugLog = function() {
+      sessionStorage.removeItem(STORAGE_KEY);
+      logEl.innerHTML = '';
+    };
 
-    console.log('Debug panel initialized.');
+    // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
+    renderAll();
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v4 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
@@ -259,6 +292,7 @@
       code_challenge: challenge
     });
 
+    console.log('Redirecting to Spotify authorize with redirect_uri=' + REDIRECT_URI);
     window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
   }
 
@@ -332,10 +366,14 @@
       }
 
       const data = await res.json();
+      console.log('Raw /me/playlists response:', JSON.stringify(data).slice(0, 2000));
       const select = document.getElementById('userPlaylists');
       select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
 
       const validItems = (data.items || []).filter(p => p && p.id);
+      if (validItems.length > 0) {
+        console.log('Sample playlist item:', JSON.stringify(validItems[0]));
+      }
 
       if (validItems.length > 0) {
         validItems.forEach(p => {
@@ -366,16 +404,42 @@
       const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=30`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+
+      console.log(`GET /playlists/${playlistId}/tracks -> HTTP ${res.status}`);
+
+      if (!res.ok) {
+        let bodyText = '';
+        try { bodyText = JSON.stringify(await res.json()); } catch (e) { /* not JSON */ }
+        console.error('Playlist tracks fetch failed:', res.status, res.statusText, bodyText);
+        setStatus(`Failed to load songs (HTTP ${res.status}). See debug panel.`, 'error');
+        return;
+      }
+
       const data = await res.json();
+      console.log('Raw playlist tracks response:', JSON.stringify(data).slice(0, 2000));
+
+      if (!data.items) {
+        console.error('Response has no items field:', JSON.stringify(data));
+        setStatus('Unexpected response shape from Spotify. See debug panel.', 'error');
+        return;
+      }
 
       const queries = data.items
-        .filter(item => item.track)
+        .filter(item => item && item.track)
         .map(item => `${item.track.name} ${item.track.artists[0]?.name}`);
+
+      console.log(`Extracted ${queries.length} track queries out of ${data.items.length} items.`);
+
+      if (queries.length === 0) {
+        setStatus('No playable tracks found in this playlist (may be local files or missing metadata).', 'error');
+        return;
+      }
 
       setStatus(`Found ${queries.length} tracks. Fetching audio clips...`, 'loading');
       await resolveAudioForTracks(queries);
     } catch (e) {
-      setStatus('Failed to load songs from playlist.', 'error');
+      console.error('Exception in loadSelectedPlaylist:', e);
+      setStatus(`Failed to load songs: ${e.message}`, 'error');
     }
   }
 
