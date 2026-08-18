@@ -92,7 +92,7 @@
 <body>
 
 <div class="container">
-  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v4</div>
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v5</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -152,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console (build 2026-08-18-v4)</span>
+    <span>Debug Console (build 2026-08-18-v5)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -235,7 +235,7 @@
 
     // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
     renderAll();
-    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v4 ---');
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v5 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
@@ -379,7 +379,8 @@
         validItems.forEach(p => {
           const opt = document.createElement('option');
           opt.value = p.id;
-          const trackCount = p.tracks && typeof p.tracks.total === 'number' ? p.tracks.total : '?';
+          const tracksInfo = p.items || p.tracks; // Spotify renamed 'tracks' -> 'items' for newer apps
+          const trackCount = tracksInfo && typeof tracksInfo.total === 'number' ? tracksInfo.total : '?';
           opt.innerText = `${p.name || 'Untitled playlist'} (${trackCount} songs)`;
           select.appendChild(opt);
         });
@@ -401,17 +402,21 @@
     setStatus('Extracting songs from Spotify...', 'loading');
 
     try {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=30`, {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=30`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      console.log(`GET /playlists/${playlistId}/tracks -> HTTP ${res.status}`);
+      console.log(`GET /playlists/${playlistId}/items -> HTTP ${res.status}`);
 
       if (!res.ok) {
         let bodyText = '';
         try { bodyText = JSON.stringify(await res.json()); } catch (e) { /* not JSON */ }
-        console.error('Playlist tracks fetch failed:', res.status, res.statusText, bodyText);
-        setStatus(`Failed to load songs (HTTP ${res.status}). See debug panel.`, 'error');
+        console.error('Playlist items fetch failed:', res.status, res.statusText, bodyText);
+        if (res.status === 403) {
+          setStatus('403 Forbidden: this playlist may not be one you own or collaborate on, or your account needs to be added under Dashboard > User Management.', 'error');
+        } else {
+          setStatus(`Failed to load songs (HTTP ${res.status}). See debug panel.`, 'error');
+        }
         return;
       }
 
@@ -425,8 +430,12 @@
       }
 
       const queries = data.items
-        .filter(item => item && item.track)
-        .map(item => `${item.track.name} ${item.track.artists[0]?.name}`);
+        .filter(entry => entry && (entry.item || entry.track) && !entry.is_local)
+        .map(entry => {
+          const trackObj = entry.item || entry.track; // Spotify renamed 'track' -> 'item' (Feb 2026 migration)
+          const artistName = trackObj.artists && trackObj.artists[0] ? trackObj.artists[0].name : '';
+          return `${trackObj.name} ${artistName}`;
+        });
 
       console.log(`Extracted ${queries.length} track queries out of ${data.items.length} items.`);
 
