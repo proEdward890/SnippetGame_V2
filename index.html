@@ -260,11 +260,14 @@
       const select = document.getElementById('userPlaylists');
       select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
 
-      if (data.items && data.items.length > 0) {
-        data.items.forEach(p => {
+      const validItems = (data.items || []).filter(p => p && p.id);
+
+      if (validItems.length > 0) {
+        validItems.forEach(p => {
           const opt = document.createElement('option');
           opt.value = p.id;
-          opt.innerText = `${p.name} (${p.tracks.total} songs)`;
+          const trackCount = p.tracks && typeof p.tracks.total === 'number' ? p.tracks.total : '?';
+          opt.innerText = `${p.name || 'Untitled playlist'} (${trackCount} songs)`;
           select.appendChild(opt);
         });
         setStatus('Select a playlist to begin!', 'success');
