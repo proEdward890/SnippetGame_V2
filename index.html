@@ -24,7 +24,7 @@
     body { background-color: var(--bg-color); color: var(--text); display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
     .container { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px; }
 
-    /* Auth & Selector UI */
+    /* Auth & Selectors */
     .auth-section { display: flex; flex-direction: column; gap: 8px; }
     .spotify-btn { background: var(--spotify); color: #000; border: none; font-weight: bold; border-radius: 12px; padding: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
     select, input, button { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--card-bg); color: var(--text); font-size: 14px; outline: none; }
@@ -45,18 +45,19 @@
     .diff-pill.active.expert { background: var(--expert); color: #fff; }
     .diff-pill.active.impossible { background: var(--imp); color: #fff; box-shadow: 0 0 12px rgba(106, 27, 154, 0.6); }
 
-    /* Progress & Play */
+    /* Timeline */
     .timeline-container { height: 22px; background: #242420; border-radius: 12px; display: flex; overflow: hidden; border: 1px solid #333; }
     .segment { height: 100%; border-right: 1.5px solid #141412; background: transparent; transition: background 0.3s; }
     .segment.unlocked { background: #44443e; }
     .segment.current { background: var(--accent); }
 
+    /* Player */
     .player-area { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 170px; position: relative; }
     .play-btn { width: 88px; height: 88px; border-radius: 50%; background: var(--accent); border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(245, 184, 46, 0.25); }
     .play-btn svg { width: 34px; height: 34px; fill: #141412; }
     .time-badge { position: absolute; right: 14px; bottom: 8px; font-size: 14px; font-weight: 800; color: var(--accent); font-family: monospace; }
 
-    /* Guess Section */
+    /* Guess Box */
     .guess-area { display: flex; flex-direction: column; gap: 10px; position: relative; }
     .autocomplete-list { position: absolute; bottom: 105%; left: 0; right: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; max-height: 180px; overflow-y: auto; display: none; z-index: 20; }
     .autocomplete-item { padding: 10px 14px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #222; }
@@ -73,7 +74,7 @@
 <body>
 
 <div class="container">
-  <!-- Spotify OAuth Integration -->
+  <!-- Auth & Playlist Selector -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.35-1.435-5.308-1.76-8.793-.963-.335.077-.67-.133-.746-.468-.077-.334.132-.67.467-.746 3.808-.87 7.076-.51 9.722 1.113.294.18.386.563.207.857zm1.226-2.726c-.226.367-.708.482-1.075.257-2.69-1.653-6.79-2.132-9.972-1.166-.413.125-.85-.107-.975-.52-.126-.413.107-.85.52-.975 3.633-1.103 8.147-.57 11.265 1.33.367.225.482.707.257 1.074zm.106-2.836C14.692 8.95 9.375 8.775 6.297 9.71c-.494.15-1.018-.13-1.168-.624-.15-.494.13-1.018.624-1.168 3.532-1.072 9.404-.866 13.115 1.337.445.264.59.838.327 1.282-.264.444-.838.59-1.282.327z"/></svg>
@@ -129,9 +130,8 @@
 <audio id="nativeAudio" preload="auto"></audio>
 
 <script>
-  // --- CONFIGURATION ---
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
-  const REDIRECT_URI = window.location.origin + window.location.pathname;
+  const REDIRECT_URI = 'https://edward890.github.io/SnippetGame_V2/';
 
   const DIFFICULTIES = {
     easy:       [0.5, 1.0, 2.0, 4.0, 7.0, 15.0],
@@ -154,112 +154,87 @@
     el.innerText = msg;
   }
 
-  // --- SPOTIFY PKCE OAUTH ---
-  function generateRandomString(length) {
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const values = crypto.getRandomValues(new Uint8Array(length));
-    return values.reduce((acc, x) => acc + possible[x % possible.length], "");
+  // --- SPOTIFY DIRECT TOKEN AUTH ---
+  function loginWithSpotify() {
+    const scopes = 'playlist-read-private playlist-read-collaborative user-library-read';
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scopes)}`;
+    window.location.href = authUrl;
   }
 
-  async function generateCodeChallenge(codeVerifier) {
-    const data = new TextEncoder().encode(codeVerifier);
-    const digest = await window.crypto.subtle.digest('SHA-256', data);
-    return btoa(String.fromCharCode.apply(null, [...new Uint8Array(digest)]))
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  }
+  function handleOAuthCallback() {
+    const hash = window.location.hash.substring(1);
+    if (!hash) return;
 
-  async function loginWithSpotify() {
-    const verifier = generateRandomString(64);
-    const challenge = await generateCodeChallenge(verifier);
-    window.localStorage.setItem("code_verifier", verifier);
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
 
-    const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      response_type: 'code',
-      redirect_uri: REDIRECT_URI,
-      scope: 'playlist-read-private playlist-read-collaborative user-library-read',
-      code_challenge_method: 'S256',
-      code_challenge: challenge
-    });
-
-    document.location = `https://accounts.spotify.com/authorize?${params.toString()}`;
-  }
-
-  async function handleOAuthCallback() {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    if (!code) return;
-
-    window.history.replaceState({}, document.title, window.location.pathname);
-    const verifier = localStorage.getItem("code_verifier");
-
-    setStatus("Authenticating with Spotify...", "loading");
-
-    const res = await fetch("https://accounts.spotify.com/api/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: CLIENT_ID,
-        grant_type: "authorization_code",
-        code: code,
-        redirect_uri: REDIRECT_URI,
-        code_verifier: verifier
-      })
-    });
-
-    const data = await res.json();
-    if (data.access_token) {
-      localStorage.setItem("spotify_token", data.access_token);
-      onAuthenticated(data.access_token);
-    } else {
-      setStatus("Spotify authentication failed", "error");
+    if (accessToken) {
+      localStorage.setItem('spotify_token', accessToken);
+      window.location.hash = '';
+      onAuthenticated(accessToken);
     }
   }
 
   async function onAuthenticated(token) {
-    document.getElementById("loginBtn").style.display = "none";
-    document.getElementById("playlistSelectorContainer").style.display = "flex";
-    setStatus("Fetching your Spotify playlists...", "loading");
+    document.getElementById('loginBtn').style.display = 'none';
+    document.getElementById('playlistSelectorContainer').style.display = 'flex';
+    setStatus('Fetching your playlists...', 'loading');
 
-    const res = await fetch("https://api.spotify.com/v1/me/playlists?limit=50", {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const data = await res.json();
-
-    const select = document.getElementById("userPlaylists");
-    select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
-
-    if (data.items && data.items.length > 0) {
-      data.items.forEach(p => {
-        const opt = document.createElement("option");
-        opt.value = p.id;
-        opt.innerText = `${p.name} (${p.tracks.total} songs)`;
-        select.appendChild(opt);
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me/playlists?limit=50', {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      setStatus("Select a playlist above to play", "success");
-    } else {
-      setStatus("No playlists found in your account", "error");
+
+      if (res.status === 401) {
+        localStorage.removeItem('spotify_token');
+        document.getElementById('loginBtn').style.display = 'flex';
+        document.getElementById('playlistSelectorContainer').style.display = 'none';
+        setStatus('Session expired. Please tap Connect again.', 'error');
+        return;
+      }
+
+      const data = await res.json();
+      const select = document.getElementById('userPlaylists');
+      select.innerHTML = '<option value="">-- Select a Playlist --</option>';
+
+      if (data.items && data.items.length > 0) {
+        data.items.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.innerText = `${p.name} (${p.tracks.total} songs)`;
+          select.appendChild(opt);
+        });
+        setStatus('Select a playlist above to start playing!', 'success');
+      } else {
+        setStatus('No playlists found on this Spotify account.', 'error');
+      }
+    } catch (err) {
+      setStatus('Failed to load playlists. Check internet.', 'error');
     }
   }
 
   async function loadSelectedPlaylist() {
-    const playlistId = document.getElementById("userPlaylists").value;
+    const playlistId = document.getElementById('userPlaylists').value;
     if (!playlistId) return;
 
-    const token = localStorage.getItem("spotify_token");
-    setStatus("Fetching tracks from Spotify...", "loading");
+    const token = localStorage.getItem('spotify_token');
+    setStatus('Fetching songs from playlist...', 'loading');
 
-    const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=30`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const data = await res.json();
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=30`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
 
-    const trackQueries = data.items
-      .filter(item => item.track)
-      .map(item => `${item.track.name} ${item.track.artists[0]?.name}`);
+      const trackQueries = data.items
+        .filter(item => item.track)
+        .map(item => `${item.track.name} ${item.track.artists[0]?.name}`);
 
-    setStatus(`Extracted ${trackQueries.length} tracks. Fetching previews...`, "loading");
-    await resolveAudioForTracks(trackQueries);
+      setStatus(`Found ${trackQueries.length} songs. Loading sound clips...`, 'loading');
+      await resolveAudioForTracks(trackQueries);
+    } catch (e) {
+      setStatus('Error loading tracks from Spotify.', 'error');
+    }
   }
 
   async function resolveAudioForTracks(queries) {
@@ -274,7 +249,7 @@
             playlist.push(data.results[0]);
           }
           done++;
-          setStatus(`Loading tracks: ${done}/${queries.length}`, "loading");
+          setStatus(`Loading tracks: ${done}/${queries.length}`, 'loading');
           delete window[cbName];
           script.remove();
           resolve();
@@ -288,14 +263,14 @@
     }
 
     if (playlist.length > 0) {
-      setStatus(`Ready! Loaded ${playlist.length} playable songs from playlist.`, "success");
+      setStatus(`Ready! Loaded ${playlist.length} songs from your playlist.`, 'success');
       nextRound();
     } else {
-      setStatus("Could not find playable previews for this playlist.", "error");
+      setStatus('Could not retrieve audio clips for this playlist.', 'error');
     }
   }
 
-  // --- GAME ENGINE ---
+  // --- GAMEPLAY ENGINE ---
   function setDifficulty(diff) {
     currentDiff = diff;
     document.querySelectorAll('.diff-pill').forEach(btn => {
@@ -340,7 +315,7 @@
   }
 
   function playSnippet() {
-    if (!currentTrack) { setStatus('Pick a playlist first!', 'error'); return; }
+    if (!currentTrack) { setStatus('Select a playlist first!', 'error'); return; }
     clearTimeout(stopTimer);
 
     const duration = DIFFICULTIES[currentDiff][currentStep];
@@ -353,7 +328,7 @@
         audioElement.currentTime = 0;
         togglePlayIcon(false);
       }, duration * 1000);
-    }).catch(() => setStatus('Tap again to enable sound', 'error'));
+    }).catch(() => setStatus('Tap again to enable audio', 'error'));
   }
 
   function togglePlayIcon(playing) {
@@ -421,16 +396,16 @@
     card.style.display = 'flex';
   }
 
-  // --- INIT ---
   window.onload = () => {
     renderTimeline();
     updateBadge();
 
-    const token = localStorage.getItem("spotify_token");
-    if (window.location.search.includes("code=")) {
+    // Check for token in URL or Storage
+    if (window.location.hash.includes('access_token')) {
       handleOAuthCallback();
-    } else if (token) {
-      onAuthenticated(token);
+    } else {
+      const token = localStorage.getItem('spotify_token');
+      if (token) onAuthenticated(token);
     }
   };
 </script>
