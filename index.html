@@ -131,8 +131,7 @@
 
 <script>
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
-  const REDIRECT_URI = 'https://edward890.github.io/SnippetGame_V2/';
-
+  const REDIRECT_URI = window.location.origin + window.location.pathname;
   const DIFFICULTIES = {
     easy:       [0.5, 1.0, 2.0, 4.0, 7.0, 15.0],
     medium:     [0.1, 0.3, 0.7, 1.5, 3.0, 6.0],
