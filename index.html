@@ -69,6 +69,24 @@
     /* Result Card */
     .result-card { display: none; background: #1c1c18; border: 1px solid var(--border); border-radius: 14px; padding: 16px; text-align: center; gap: 10px; flex-direction: column; align-items: center; }
     .result-card img { width: 90px; height: 90px; border-radius: 8px; object-fit: cover; }
+
+    /* Debug Panel */
+    #debugToggle { position: fixed; bottom: 12px; right: 12px; z-index: 999; width: 44px; height: 44px; border-radius: 50%; background: #b71c1c; color: #fff; border: none; font-weight: 800; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+    #debugToggle.hasErrors { animation: debugPulse 1.5s infinite; }
+    @keyframes debugPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(183,28,28,0.7);} 50% { box-shadow: 0 0 0 10px rgba(183,28,28,0);} }
+    #debugPanel { position: fixed; bottom: 0; left: 0; right: 0; height: 45vh; background: #0a0a09; border-top: 2px solid #b71c1c; z-index: 1000; display: none; flex-direction: column; font-family: monospace; }
+    #debugPanel.open { display: flex; }
+    #debugHeader { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #181816; border-bottom: 1px solid var(--border); }
+    #debugHeader span { font-size: 12px; font-weight: bold; color: var(--accent); }
+    #debugHeader div { display: flex; gap: 8px; }
+    #debugHeader button { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
+    #debugLog { flex: 1; overflow-y: auto; padding: 8px 10px; font-size: 11px; line-height: 1.5; }
+    .debug-entry { border-bottom: 1px solid #1c1c18; padding: 5px 0; white-space: pre-wrap; word-break: break-word; }
+    .debug-entry.log { color: #ccc; }
+    .debug-entry.error { color: #ff6b6b; }
+    .debug-entry.warn { color: #f5b82e; }
+    .debug-entry.info { color: #64b5f6; }
+    .debug-time { color: #666; margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -129,7 +147,64 @@
 
 <audio id="nativeAudio" preload="auto"></audio>
 
+<!-- Debug Panel -->
+<button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
+<div id="debugPanel">
+  <div id="debugHeader">
+    <span>Debug Console</span>
+    <div>
+      <button onclick="clearDebugLog()">Clear</button>
+      <button onclick="toggleDebugPanel()">Close</button>
+    </div>
+  </div>
+  <div id="debugLog"></div>
+</div>
+
 <script>
+  // --- DEBUG PANEL: captures console output + uncaught errors, no external tools needed ---
+  (function() {
+    const logEl = document.getElementById('debugLog');
+    const toggleBtn = document.getElementById('debugToggle');
+    const originalConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+
+    function formatArg(a) {
+      if (a instanceof Error) return a.stack || a.message;
+      if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); } }
+      return String(a);
+    }
+
+    function addEntry(type, args) {
+      const entry = document.createElement('div');
+      entry.className = `debug-entry ${type}`;
+      const time = new Date().toLocaleTimeString();
+      const msg = Array.from(args).map(formatArg).join(' ');
+      entry.innerHTML = `<span class="debug-time">${time}</span>${msg.replace(/</g, '&lt;')}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+      if (type === 'error' || type === 'warn') toggleBtn.classList.add('hasErrors');
+    }
+
+    console.log = function(...args) { addEntry('log', args); originalConsole.log.apply(console, args); };
+    console.error = function(...args) { addEntry('error', args); originalConsole.error.apply(console, args); };
+    console.warn = function(...args) { addEntry('warn', args); originalConsole.warn.apply(console, args); };
+    console.info = function(...args) { addEntry('info', args); originalConsole.info.apply(console, args); };
+
+    window.addEventListener('error', (e) => {
+      addEntry('error', [`Uncaught: ${e.message} (${e.filename}:${e.lineno}:${e.colno})`]);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      addEntry('error', [`Unhandled Promise Rejection: ${e.reason && e.reason.message ? e.reason.message : e.reason}`]);
+    });
+
+    window.toggleDebugPanel = function() {
+      document.getElementById('debugPanel').classList.toggle('open');
+      toggleBtn.classList.remove('hasErrors');
+    };
+    window.clearDebugLog = function() { logEl.innerHTML = ''; };
+
+    console.log('Debug panel initialized.');
+  })();
+
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
   const REDIRECT_URI = 'https://proedward890.github.io/SnippetGame_V2/';
 
