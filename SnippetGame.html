@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Song Snippet Guesser</title>
+  <style>
+    :root {
+      --bg-color: #0d0d0b;
+      --card-bg: #181816;
+      --accent: #f5b82e;
+      --spotify: #1db954;
+      --text: #f0f0f0;
+      --muted: #888880;
+      --border: #2c2c28;
+      --easy: #2e7d32;
+      --med: #f5b82e;
+      --hard: #c85a17;
+      --expert: #b71c1c;
+      --imp: #6a1b9a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; user-select: none; }
+    body { background-color: var(--bg-color); color: var(--text); display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
+    .container { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px; }
+
+    /* Auth & Selector UI */
+    .auth-section { display: flex; flex-direction: column; gap: 8px; }
+    .spotify-btn { background: var(--spotify); color: #000; border: none; font-weight: bold; border-radius: 12px; padding: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
+    select, input, button { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--card-bg); color: var(--text); font-size: 14px; outline: none; }
+    button { cursor: pointer; font-weight: bold; }
+    button:active { transform: scale(0.97); }
+
+    .status-text { font-size: 12px; color: var(--muted); min-height: 16px; }
+    .status-text.loading { color: var(--accent); }
+    .status-text.success { color: var(--spotify); }
+    .status-text.error { color: #ff5252; }
+
+    /* Difficulty Pills */
+    .difficulty-selector { display: flex; gap: 6px; justify-content: space-between; }
+    .diff-pill { flex: 1; padding: 8px 4px; text-align: center; border-radius: 20px; font-size: 12px; font-weight: 700; border: none; background: #242420; color: var(--muted); cursor: pointer; }
+    .diff-pill.active.easy { background: var(--easy); color: #fff; }
+    .diff-pill.active.medium { background: var(--med); color: #000; }
+    .diff-pill.active.hard { background: var(--hard); color: #fff; }
+    .diff-pill.active.expert { background: var(--expert); color: #fff; }
+    .diff-pill.active.impossible { background: var(--imp); color: #fff; box-shadow: 0 0 12px rgba(106, 27, 154, 0.6); }
+
+    /* Progress & Play */
+    .timeline-container { height: 22px; background: #242420; border-radius: 12px; display: flex; overflow: hidden; border: 1px solid #333; }
+    .segment { height: 100%; border-right: 1.5px solid #141412; background: transparent; transition: background 0.3s; }
+    .segment.unlocked { background: #44443e; }
+    .segment.current { background: var(--accent); }
+
+    .player-area { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 170px; position: relative; }
+    .play-btn { width: 88px; height: 88px; border-radius: 50%; background: var(--accent); border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(245, 184, 46, 0.25); }
+    .play-btn svg { width: 34px; height: 34px; fill: #141412; }
+    .time-badge { position: absolute; right: 14px; bottom: 8px; font-size: 14px; font-weight: 800; color: var(--accent); font-family: monospace; }
+
+    /* Guess Section */
+    .guess-area { display: flex; flex-direction: column; gap: 10px; position: relative; }
+    .autocomplete-list { position: absolute; bottom: 105%; left: 0; right: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; max-height: 180px; overflow-y: auto; display: none; z-index: 20; }
+    .autocomplete-item { padding: 10px 14px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #222; }
+    .autocomplete-item:hover { background: #252520; }
+    .action-row { display: flex; gap: 8px; }
+    .skip-btn { background: #2a2a26; flex: 1; }
+    .submit-btn { background: var(--accent); color: #000; flex: 2; }
+
+    /* Result Card */
+    .result-card { display: none; background: #1c1c18; border: 1px solid var(--border); border-radius: 14px; padding: 16px; text-align: center; gap: 10px; flex-direction: column; align-items: center; }
+    .result-card img { width: 90px; height: 90px; border-radius: 8px; object-fit: cover; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Spotify OAuth Integration -->
+  <div class="auth-section">
+    <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.35-1.435-5.308-1.76-8.793-.963-.335.077-.67-.133-.746-.468-.077-.334.132-.67.467-.746 3.808-.87 7.076-.51 9.722 1.113.294.18.386.563.207.857zm1.226-2.726c-.226.367-.708.482-1.075.257-2.69-1.653-6.79-2.132-9.972-1.166-.413.125-.85-.107-.975-.52-.126-.413.107-.85.52-.975 3.633-1.103 8.147-.57 11.265 1.33.367.225.482.707.257 1.074zm.106-2.836C14.692 8.95 9.375 8.775 6.297 9.71c-.494.15-1.018-.13-1.168-.624-.15-.494.13-1.018.624-1.168 3.532-1.072 9.404-.866 13.115 1.337.445.264.59.838.327 1.282-.264.444-.838.59-1.282.327z"/></svg>
+      Connect with Spotify
+    </button>
+
+    <div id="playlistSelectorContainer" style="display: none; flex-direction: column; gap: 8px;">
+      <select id="userPlaylists" onchange="loadSelectedPlaylist()"></select>
+    </div>
+    
+    <span class="status-text" id="statusText">Sign in to load your library</span>
+  </div>
+
+  <!-- Difficulty Selector -->
+  <div class="difficulty-selector">
+    <button class="diff-pill easy" onclick="setDifficulty('easy')">Easy</button>
+    <button class="diff-pill medium active" onclick="setDifficulty('medium')">Medium</button>
+    <button class="diff-pill hard" onclick="setDifficulty('hard')">Hard</button>
+    <button class="diff-pill expert" onclick="setDifficulty('expert')">Expert</button>
+    <button class="diff-pill impossible" onclick="setDifficulty('impossible')">Impossible</button>
+  </div>
+
+  <!-- Timeline Bar -->
+  <div class="timeline-container" id="timeline"></div>
+
+  <!-- Play Button -->
+  <div class="player-area">
+    <button class="play-btn" id="playBtn" onclick="playSnippet()">
+      <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <div class="time-badge" id="timeBadge">0.10s</div>
+  </div>
+
+  <!-- Guess Form -->
+  <div class="guess-area">
+    <div class="autocomplete-list" id="autocomplete"></div>
+    <input type="text" id="guessInput" placeholder="Guess the song title..." oninput="onSearchInput()">
+    <div class="action-row">
+      <button class="skip-btn" onclick="skipStep()">Skip</button>
+      <button class="submit-btn" onclick="checkGuess()">Submit</button>
+    </div>
+  </div>
+
+  <!-- Result Banner -->
+  <div class="result-card" id="resultCard">
+    <h3 id="resultTitle">Correct!</h3>
+    <img id="trackArt" src="" alt="Album Art">
+    <p id="trackDetails" style="font-size: 14px; font-weight: bold;"></p>
+    <button onclick="nextRound()" style="background: var(--accent); color: #000; width: 100%;">Next Song</button>
+  </div>
+</div>
+
+<audio id="nativeAudio" preload="auto"></audio>
+
+<script>
+  // --- CONFIGURATION ---
+  const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
+  const REDIRECT_URI = window.location.origin + window.location.pathname;
+
+  const DIFFICULTIES = {
+    easy:       [0.5, 1.0, 2.0, 4.0, 7.0, 15.0],
+    medium:     [0.1, 0.3, 0.7, 1.5, 3.0, 6.0],
+    hard:       [0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+    expert:     [0.02, 0.05, 0.1, 0.2, 0.5, 1.0],
+    impossible: [0.01, 0.02, 0.05, 0.1, 0.25, 0.5]
+  };
+
+  let currentDiff = 'medium';
+  let playlist = [];
+  let currentTrack = null;
+  let currentStep = 0;
+  let stopTimer = null;
+  const audioElement = document.getElementById('nativeAudio');
+
+  function setStatus(msg, type = 'normal') {
+    const el = document.getElementById('statusText');
+    el.className = `status-text ${type}`;
+    el.innerText = msg;
+  }
+
+  // --- SPOTIFY PKCE OAUTH ---
+  function generateRandomString(length) {
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const values = crypto.getRandomValues(new Uint8Array(length));
+    return values.reduce((acc, x) => acc + possible[x % possible.length], "");
+  }
+
+  async function generateCodeChallenge(codeVerifier) {
+    const data = new TextEncoder().encode(codeVerifier);
+    const digest = await window.crypto.subtle.digest('SHA-256', data);
+    return btoa(String.fromCharCode.apply(null, [...new Uint8Array(digest)]))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  async function loginWithSpotify() {
+    const verifier = generateRandomString(64);
+    const challenge = await generateCodeChallenge(verifier);
+    window.localStorage.setItem("code_verifier", verifier);
+
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      scope: 'playlist-read-private playlist-read-collaborative user-library-read',
+      code_challenge_method: 'S256',
+      code_challenge: challenge
+    });
+
+    document.location = `https://accounts.spotify.com/authorize?${params.toString()}`;
+  }
+
+  async function handleOAuthCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (!code) return;
+
+    window.history.replaceState({}, document.title, window.location.pathname);
+    const verifier = localStorage.getItem("code_verifier");
+
+    setStatus("Authenticating with Spotify...", "loading");
+
+    const res = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        grant_type: "authorization_code",
+        code: code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: verifier
+      })
+    });
+
+    const data = await res.json();
+    if (data.access_token) {
+      localStorage.setItem("spotify_token", data.access_token);
+      onAuthenticated(data.access_token);
+    } else {
+      setStatus("Spotify authentication failed", "error");
+    }
+  }
+
+  async function onAuthenticated(token) {
+    document.getElementById("loginBtn").style.display = "none";
+    document.getElementById("playlistSelectorContainer").style.display = "flex";
+    setStatus("Fetching your Spotify playlists...", "loading");
+
+    const res = await fetch("https://api.spotify.com/v1/me/playlists?limit=50", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+
+    const select = document.getElementById("userPlaylists");
+    select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
+
+    if (data.items && data.items.length > 0) {
+      data.items.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.innerText = `${p.name} (${p.tracks.total} songs)`;
+        select.appendChild(opt);
+      });
+      setStatus("Select a playlist above to play", "success");
+    } else {
+      setStatus("No playlists found in your account", "error");
+    }
+  }
+
+  async function loadSelectedPlaylist() {
+    const playlistId = document.getElementById("userPlaylists").value;
+    if (!playlistId) return;
+
+    const token = localStorage.getItem("spotify_token");
+    setStatus("Fetching tracks from Spotify...", "loading");
+
+    const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=30`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+
+    const trackQueries = data.items
+      .filter(item => item.track)
+      .map(item => `${item.track.name} ${item.track.artists[0]?.name}`);
+
+    setStatus(`Extracted ${trackQueries.length} tracks. Fetching previews...`, "loading");
+    await resolveAudioForTracks(trackQueries);
+  }
+
+  async function resolveAudioForTracks(queries) {
+    playlist = [];
+    let done = 0;
+
+    for (let q of queries) {
+      await new Promise(resolve => {
+        const cbName = `itunes_cb_${Date.now()}_${Math.floor(Math.random()*1000)}`;
+        window[cbName] = function(data) {
+          if (data.results && data.results[0] && data.results[0].previewUrl) {
+            playlist.push(data.results[0]);
+          }
+          done++;
+          setStatus(`Loading tracks: ${done}/${queries.length}`, "loading");
+          delete window[cbName];
+          script.remove();
+          resolve();
+        };
+
+        const script = document.createElement('script');
+        script.src = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1&callback=${cbName}`;
+        script.onerror = () => { done++; delete window[cbName]; script.remove(); resolve(); };
+        document.body.appendChild(script);
+      });
+    }
+
+    if (playlist.length > 0) {
+      setStatus(`Ready! Loaded ${playlist.length} playable songs from playlist.`, "success");
+      nextRound();
+    } else {
+      setStatus("Could not find playable previews for this playlist.", "error");
+    }
+  }
+
+  // --- GAME ENGINE ---
+  function setDifficulty(diff) {
+    currentDiff = diff;
+    document.querySelectorAll('.diff-pill').forEach(btn => {
+      btn.classList.remove('active');
+      if (btn.classList.contains(diff)) btn.classList.add('active');
+    });
+    currentStep = 0;
+    renderTimeline();
+    updateBadge();
+  }
+
+  function nextRound() {
+    if (playlist.length === 0) return;
+    document.getElementById('resultCard').style.display = 'none';
+    document.getElementById('guessInput').value = '';
+    currentStep = 0;
+
+    currentTrack = playlist[Math.floor(Math.random() * playlist.length)];
+    renderTimeline();
+    updateBadge();
+
+    audioElement.src = currentTrack.previewUrl;
+    audioElement.load();
+  }
+
+  function renderTimeline() {
+    const timeline = document.getElementById('timeline');
+    timeline.innerHTML = '';
+    DIFFICULTIES[currentDiff].forEach((dur, i) => {
+      const seg = document.createElement('div');
+      seg.className = 'segment';
+      seg.style.flex = dur;
+      if (i <= currentStep) seg.classList.add('unlocked');
+      if (i === currentStep) seg.classList.add('current');
+      timeline.appendChild(seg);
+    });
+  }
+
+  function updateBadge() {
+    const dur = DIFFICULTIES[currentDiff][currentStep];
+    document.getElementById('timeBadge').innerText = `${dur.toFixed(2)}s`;
+  }
+
+  function playSnippet() {
+    if (!currentTrack) { setStatus('Pick a playlist first!', 'error'); return; }
+    clearTimeout(stopTimer);
+
+    const duration = DIFFICULTIES[currentDiff][currentStep];
+    audioElement.currentTime = 0;
+    
+    audioElement.play().then(() => {
+      togglePlayIcon(true);
+      stopTimer = setTimeout(() => {
+        audioElement.pause();
+        audioElement.currentTime = 0;
+        togglePlayIcon(false);
+      }, duration * 1000);
+    }).catch(() => setStatus('Tap again to enable sound', 'error'));
+  }
+
+  function togglePlayIcon(playing) {
+    document.getElementById('playIcon').innerHTML = playing 
+      ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' 
+      : '<path d="M8 5v14l11-7z"/>';
+  }
+
+  function skipStep() {
+    const maxSteps = DIFFICULTIES[currentDiff].length;
+    if (currentStep < maxSteps - 1) {
+      currentStep++;
+      renderTimeline();
+      updateBadge();
+    } else {
+      endGame(false);
+    }
+  }
+
+  function checkGuess() {
+    const guess = document.getElementById('guessInput').value.trim().toLowerCase();
+    if (!guess) return;
+
+    const actual = currentTrack.trackName.toLowerCase();
+    if (actual.includes(guess) || guess.includes(actual)) {
+      endGame(true);
+    } else {
+      skipStep();
+    }
+  }
+
+  function onSearchInput() {
+    const val = document.getElementById('guessInput').value.trim().toLowerCase();
+    const ac = document.getElementById('autocomplete');
+    ac.innerHTML = '';
+    if (!val) { ac.style.display = 'none'; return; }
+
+    const matches = playlist.filter(t => t.trackName.toLowerCase().includes(val)).slice(0, 5);
+    if (matches.length === 0) { ac.style.display = 'none'; return; }
+
+    matches.forEach(t => {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item';
+      item.innerText = `${t.trackName} — ${t.artistName}`;
+      item.onclick = () => {
+        document.getElementById('guessInput').value = t.trackName;
+        ac.style.display = 'none';
+      };
+      ac.appendChild(item);
+    });
+    ac.style.display = 'block';
+  }
+
+  function endGame(won) {
+    clearTimeout(stopTimer);
+    audioElement.pause();
+    
+    const card = document.getElementById('resultCard');
+    const title = document.getElementById('resultTitle');
+    title.innerText = won ? '🎉 You Guessed It!' : '❌ Game Over!';
+    title.style.color = won ? '#4caf50' : '#f44336';
+    
+    document.getElementById('trackArt').src = currentTrack.artworkUrl100 || 'https://via.placeholder.com/100';
+    document.getElementById('trackDetails').innerText = `${currentTrack.trackName} by ${currentTrack.artistName}`;
+    card.style.display = 'flex';
+  }
+
+  // --- INIT ---
+  window.onload = () => {
+    renderTimeline();
+    updateBadge();
+
+    const token = localStorage.getItem("spotify_token");
+    if (window.location.search.includes("code=")) {
+      handleOAuthCallback();
+    } else if (token) {
+      onAuthenticated(token);
+    }
+  };
+</script>
+</body>
+</html>
