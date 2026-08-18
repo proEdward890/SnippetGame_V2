@@ -131,7 +131,8 @@
 
 <script>
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
-  const REDIRECT_URI = 'https://proedward890.github.io/SnippetGame_V2/';
+  const REDIRECT_URI = 'https://edward890.github.io/SnippetGame_V2/';
+
   const DIFFICULTIES = {
     easy:       [0.5, 1.0, 2.0, 4.0, 7.0, 15.0],
     medium:     [0.1, 0.3, 0.7, 1.5, 3.0, 6.0],
@@ -215,10 +216,12 @@
         localStorage.setItem('spotify_token', data.access_token);
         onAuthenticated(data.access_token);
       } else {
-        setStatus('Authentication failed. Try connecting again.', 'error');
+        console.error('Token exchange failed:', response.status, data);
+        setStatus(`Authentication failed: ${data.error_description || data.error || 'unknown error'}`, 'error');
       }
     } catch (err) {
-      setStatus('Network error during authentication.', 'error');
+      console.error('Network error during token exchange:', err);
+      setStatus(`Network error during authentication: ${err.message}`, 'error');
     }
   }
 
@@ -240,6 +243,19 @@
         return;
       }
 
+      if (!res.ok) {
+        let bodyText = '';
+        try { bodyText = JSON.stringify(await res.json()); } catch (e) { /* body wasn't JSON */ }
+        console.error('Spotify /me/playlists failed:', res.status, res.statusText, bodyText);
+
+        if (res.status === 403) {
+          setStatus("403 Forbidden: add your Spotify account under Dashboard > User Management (Development Mode).", 'error');
+        } else {
+          setStatus(`Could not fetch playlists (HTTP ${res.status}). Check console for details.`, 'error');
+        }
+        return;
+      }
+
       const data = await res.json();
       const select = document.getElementById('userPlaylists');
       select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
@@ -256,7 +272,8 @@
         setStatus('No playlists found on this account.', 'error');
       }
     } catch (err) {
-      setStatus('Could not fetch playlists.', 'error');
+      console.error('Network/parse error fetching playlists:', err);
+      setStatus(`Could not fetch playlists: ${err.message}`, 'error');
     }
   }
 
