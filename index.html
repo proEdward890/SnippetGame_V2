@@ -92,7 +92,7 @@
 <body>
 
 <div class="container">
-  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v5</div>
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v6</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -152,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console (build 2026-08-18-v5)</span>
+    <span>Debug Console (build 2026-08-18-v6)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -235,7 +235,7 @@
 
     // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
     renderAll();
-    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v5 ---');
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v6 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
@@ -529,14 +529,41 @@
     document.getElementById('timeBadge').innerText = `${dur.toFixed(2)}s`;
   }
 
-  function playSnippet() {
+  function seekToStart(audio) {
+    // Setting currentTime on streamed (non-fully-buffered) audio triggers an ASYNC seek.
+    // Calling play() immediately after can start playback before the seek finishes,
+    // resuming from the old position instead of true 0 -- this is the bug we're fixing.
+    return new Promise((resolve) => {
+      if (audio.currentTime === 0) {
+        resolve();
+        return;
+      }
+      const onSeeked = () => {
+        audio.removeEventListener('seeked', onSeeked);
+        clearTimeout(fallback);
+        resolve();
+      };
+      audio.addEventListener('seeked', onSeeked);
+      // Safety net: some mobile browsers are inconsistent about firing 'seeked'
+      // when seeking to a value very close to the current one. Don't hang forever.
+      const fallback = setTimeout(() => {
+        audio.removeEventListener('seeked', onSeeked);
+        resolve();
+      }, 300);
+      audio.currentTime = 0;
+    });
+  }
+
+  async function playSnippet() {
     if (!currentTrack) { setStatus('Choose a playlist first!', 'error'); return; }
     clearTimeout(stopTimer);
 
     const duration = DIFFICULTIES[currentDiff][currentStep];
-    audioElement.currentTime = 0;
-    
+    audioElement.pause();
+    await seekToStart(audioElement);
+
     audioElement.play().then(() => {
+      console.log(`Playing snippet: step ${currentStep}, duration ${duration}s, started at currentTime=${audioElement.currentTime.toFixed(3)}`);
       togglePlayIcon(true);
       stopTimer = setTimeout(() => {
         audioElement.pause();
