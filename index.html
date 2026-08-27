@@ -92,7 +92,7 @@
 <body>
 
 <div class="container">
-  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-19-v8</div>
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v8</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -152,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console</span>
+    <span>Debug Console (build 2026-08-18-v8)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -162,7 +162,7 @@
 </div>
 
 <script>
-  // --- DEBUG PANEL ---
+  // --- DEBUG PANEL v4: persists across page reloads (needed because Spotify login does a full redirect) ---
   (function() {
     const STORAGE_KEY = 'debug_log_v4';
     const MAX_ENTRIES = 200;
@@ -176,24 +176,28 @@
     }
     function saveEntries(entries) {
       try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(-MAX_ENTRIES))); }
-      catch (e) { }
+      catch (e) { /* storage full or unavailable, ignore */ }
     }
+
     function formatArg(a) {
       if (a instanceof Error) return a.stack || a.message;
       if (typeof a === 'object' && a !== null) { try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); } }
       return String(a);
     }
+
     function renderEntry(entry) {
       const div = document.createElement('div');
       div.className = `debug-entry ${entry.type}`;
       div.innerHTML = `<span class="debug-time">${entry.time}</span>${entry.msg.replace(/</g, '&lt;')}`;
       logEl.appendChild(div);
     }
+
     function renderAll() {
       logEl.innerHTML = '';
       loadEntries().forEach(renderEntry);
       logEl.scrollTop = logEl.scrollHeight;
     }
+
     function addEntry(type, args) {
       const entry = {
         type,
@@ -229,25 +233,24 @@
       logEl.innerHTML = '';
     };
 
+    // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
     renderAll();
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v8 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
   const REDIRECT_URI = 'https://proedward890.github.io/SnippetGame_V2/';
 
   const DIFFICULTIES = {
-    easy:       [0.5, 1.0, 2.0, 4.0, 7.0, 15.0],
-    medium:     [0.1, 0.3, 0.7, 1.5, 3.0, 6.0],
-    hard:       [0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
-    expert:     [0.02, 0.05, 0.1, 0.2, 0.5, 1.0],
-    impossible: [0.01, 0.02, 0.05, 0.1, 0.25, 0.5]
+    easy:       [3.0, 6.0, 10.0, 15.0, 20.0, 25.0],
+    medium:     [1.5, 3.0, 5.0, 8.0, 12.0, 18.0],
+    hard:       [0.7, 1.5, 3.0, 5.0, 8.0, 12.0],
+    expert:     [0.3, 0.7, 1.5, 3.0, 5.0, 8.0],
+    impossible: [0.1, 0.3, 0.7, 1.5, 3.0, 5.0]
   };
 
   let currentDiff = 'medium';
-  let playlist = [];             // Active pool of songs (up to 50)
-  let reserveQueries = [];       // Remaining unplayed queries from the Spotify playlist
-  let playedTrackUrls = new Set(); // Prevent duplicates across rounds
-  let isReplenishing = false;
+  let playlist = [];
   let currentTrack = null;
   let currentStep = 0;
   let stopTimer = null;
@@ -289,6 +292,7 @@
       code_challenge: challenge
     });
 
+    console.log('Redirecting to Spotify authorize with redirect_uri=' + REDIRECT_URI);
     window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
   }
 
@@ -299,6 +303,7 @@
 
     if (!code) return;
 
+    // Clean address bar query string
     window.history.replaceState({}, document.title, window.location.pathname);
     setStatus('Exchanging token...', 'loading');
 
@@ -320,10 +325,12 @@
         localStorage.setItem('spotify_token', data.access_token);
         onAuthenticated(data.access_token);
       } else {
-        setStatus(`Authentication failed: ${data.error_description || data.error || 'unknown'}`, 'error');
+        console.error('Token exchange failed:', response.status, data);
+        setStatus(`Authentication failed: ${data.error_description || data.error || 'unknown error'}`, 'error');
       }
     } catch (err) {
-      setStatus(`Network error: ${err.message}`, 'error');
+      console.error('Network error during token exchange:', err);
+      setStatus(`Network error during authentication: ${err.message}`, 'error');
     }
   }
 
@@ -346,22 +353,35 @@
       }
 
       if (!res.ok) {
-        setStatus(`Could not fetch playlists (HTTP ${res.status}).`, 'error');
+        let bodyText = '';
+        try { bodyText = JSON.stringify(await res.json()); } catch (e) { /* body wasn't JSON */ }
+        console.error('Spotify /me/playlists failed:', res.status, res.statusText, bodyText);
+
+        if (res.status === 403) {
+          setStatus("403 Forbidden: add your Spotify account under Dashboard > User Management (Development Mode).", 'error');
+        } else {
+          setStatus(`Could not fetch playlists (HTTP ${res.status}). Check console for details.`, 'error');
+        }
         return;
       }
 
       const data = await res.json();
+      console.log('Raw /me/playlists response:', JSON.stringify(data).slice(0, 2000));
       const select = document.getElementById('userPlaylists');
       select.innerHTML = '<option value="">-- Choose a Playlist --</option>';
 
       const validItems = (data.items || []).filter(p => p && p.id);
       if (validItems.length > 0) {
+        console.log('Sample playlist item:', JSON.stringify(validItems[0]));
+      }
+
+      if (validItems.length > 0) {
         validItems.forEach(p => {
           const opt = document.createElement('option');
           opt.value = p.id;
-          const tracksInfo = p.items || p.tracks;
+          const tracksInfo = p.items || p.tracks; // Spotify renamed 'tracks' -> 'items' for newer apps
           const trackCount = tracksInfo && typeof tracksInfo.total === 'number' ? tracksInfo.total : '?';
-          opt.innerText = `${p.name || 'Untitled'} (${trackCount} songs)`;
+          opt.innerText = `${p.name || 'Untitled playlist'} (${trackCount} songs)`;
           select.appendChild(opt);
         });
         setStatus('Select a playlist to begin!', 'success');
@@ -369,130 +389,103 @@
         setStatus('No playlists found on this account.', 'error');
       }
     } catch (err) {
+      console.error('Network/parse error fetching playlists:', err);
       setStatus(`Could not fetch playlists: ${err.message}`, 'error');
     }
   }
 
-  // --- AUDIO STREAM RESOLVER (JSONP) ---
-  function fetchSinglePreview(query) {
-    return new Promise(resolve => {
-      const cbName = `itunes_cb_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-      const script = document.createElement('script');
-      
-      const timer = setTimeout(() => {
-        delete window[cbName];
-        script.remove();
-        resolve(null);
-      }, 4000);
-
-      window[cbName] = function(data) {
-        clearTimeout(timer);
-        delete window[cbName];
-        script.remove();
-        if (data && data.results && data.results[0] && data.results[0].previewUrl) {
-          resolve(data.results[0]);
-        } else {
-          resolve(null);
-        }
-      };
-
-      script.src = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1&callback=${cbName}`;
-      script.onerror = () => {
-        clearTimeout(timer);
-        delete window[cbName];
-        script.remove();
-        resolve(null);
-      };
-      document.body.appendChild(script);
-    });
-  }
-
-  // --- PLAYLIST LOADING & REPLENISHMENT ---
   async function loadSelectedPlaylist() {
     const playlistId = document.getElementById('userPlaylists').value;
     if (!playlistId) return;
 
     const token = localStorage.getItem('spotify_token');
-    setStatus('Extracting up to 100 songs from Spotify...', 'loading');
-
-    playlist = [];
-    reserveQueries = [];
-    playedTrackUrls.clear();
-    currentTrack = null;
+    setStatus('Extracting songs from Spotify...', 'loading');
 
     try {
-      // Fetch up to 100 songs from the playlist
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100`, {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=30`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
+      console.log(`GET /playlists/${playlistId}/items -> HTTP ${res.status}`);
+
       if (!res.ok) {
-        setStatus(`Failed to load songs (HTTP ${res.status}).`, 'error');
+        let bodyText = '';
+        try { bodyText = JSON.stringify(await res.json()); } catch (e) { /* not JSON */ }
+        console.error('Playlist items fetch failed:', res.status, res.statusText, bodyText);
+        if (res.status === 403) {
+          setStatus('403 Forbidden: this playlist may not be one you own or collaborate on, or your account needs to be added under Dashboard > User Management.', 'error');
+        } else {
+          setStatus(`Failed to load songs (HTTP ${res.status}). See debug panel.`, 'error');
+        }
         return;
       }
 
       const data = await res.json();
+      console.log('Raw playlist tracks response:', JSON.stringify(data).slice(0, 2000));
+
       if (!data.items) {
-        setStatus('Unexpected response format from Spotify.', 'error');
+        console.error('Response has no items field:', JSON.stringify(data));
+        setStatus('Unexpected response shape from Spotify. See debug panel.', 'error');
         return;
       }
 
       const queries = data.items
         .filter(entry => entry && (entry.item || entry.track) && !entry.is_local)
         .map(entry => {
-          const trackObj = entry.item || entry.track;
+          const trackObj = entry.item || entry.track; // Spotify renamed 'track' -> 'item' (Feb 2026 migration)
           const artistName = trackObj.artists && trackObj.artists[0] ? trackObj.artists[0].name : '';
           return `${trackObj.name} ${artistName}`;
         });
 
+      console.log(`Extracted ${queries.length} track queries out of ${data.items.length} items.`);
+
       if (queries.length === 0) {
-        setStatus('No playable tracks found in this playlist.', 'error');
+        setStatus('No playable tracks found in this playlist (may be local files or missing metadata).', 'error');
         return;
       }
 
-      reserveQueries = queries;
-      const targetInitialCount = Math.min(50, reserveQueries.length);
-      setStatus(`Buffering songs (target: ${targetInitialCount})...`, 'loading');
-
-      // Fill initial pool up to 50 playable tracks
-      while (reserveQueries.length > 0 && playlist.length < 50) {
-        const q = reserveQueries.shift();
-        const track = await fetchSinglePreview(q);
-        if (track && !playlist.some(p => p.previewUrl === track.previewUrl)) {
-          playlist.push(track);
-          setStatus(`Buffering songs: ${playlist.length}/${targetInitialCount}`, 'loading');
-        }
-      }
-
-      if (playlist.length > 0) {
-        setStatus(`Ready! Pool: ${playlist.length} songs (Reserve: ${reserveQueries.length})`, 'success');
-        nextRound();
-      } else {
-        setStatus('Unable to stream audio for these tracks.', 'error');
-      }
+      setStatus(`Found ${queries.length} tracks. Fetching audio clips...`, 'loading');
+      await resolveAudioForTracks(queries);
     } catch (e) {
+      console.error('Exception in loadSelectedPlaylist:', e);
       setStatus(`Failed to load songs: ${e.message}`, 'error');
     }
   }
 
-  // Automatically pulls 1 new song from the reserve pool to replace an eliminated song
-  async function replenishTrack() {
-    if (reserveQueries.length === 0 || isReplenishing) return;
-    isReplenishing = true;
+  async function resolveAudioForTracks(queries) {
+    playlist = [];
+    let done = 0;
 
-    while (reserveQueries.length > 0 && playlist.length < 50) {
-      const q = reserveQueries.shift();
-      const track = await fetchSinglePreview(q);
-      if (track && !playedTrackUrls.has(track.previewUrl) && !playlist.some(p => p.previewUrl === track.previewUrl)) {
-        playlist.push(track);
-        console.log(`Replenished 1 track: "${track.trackName}". Active pool size: ${playlist.length}, Reserve: ${reserveQueries.length}`);
-        break;
-      }
+    for (let q of queries) {
+      await new Promise(resolve => {
+        const cbName = `itunes_cb_${Date.now()}_${Math.floor(Math.random()*1000)}`;
+        window[cbName] = function(data) {
+          if (data.results && data.results[0] && data.results[0].previewUrl) {
+            playlist.push(data.results[0]);
+          }
+          done++;
+          setStatus(`Buffering audio: ${done}/${queries.length}`, 'loading');
+          delete window[cbName];
+          script.remove();
+          resolve();
+        };
+
+        const script = document.createElement('script');
+        script.src = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1&callback=${cbName}`;
+        script.onerror = () => { done++; delete window[cbName]; script.remove(); resolve(); };
+        document.body.appendChild(script);
+      });
     }
-    isReplenishing = false;
+
+    if (playlist.length > 0) {
+      setStatus(`Ready! Loaded ${playlist.length} playable songs.`, 'success');
+      nextRound();
+    } else {
+      setStatus('Unable to stream audio for these tracks.', 'error');
+    }
   }
 
-  // --- GAMEPLAY ENGINE ---
+  // --- GAME ENGINE ---
   function setDifficulty(diff) {
     currentDiff = diff;
     document.querySelectorAll('.diff-pill').forEach(btn => {
@@ -504,31 +497,12 @@
     updateBadge();
   }
 
-  async function nextRound() {
+  function nextRound() {
+    if (playlist.length === 0) return;
     document.getElementById('resultCard').style.display = 'none';
     document.getElementById('guessInput').value = '';
     currentStep = 0;
 
-    // Eliminate previous song from pool so it never repeats
-    if (currentTrack) {
-      playedTrackUrls.add(currentTrack.previewUrl);
-      const idx = playlist.findIndex(t => t.previewUrl === currentTrack.previewUrl);
-      if (idx !== -1) {
-        playlist.splice(idx, 1);
-      }
-      currentTrack = null;
-
-      // Auto-import a fresh unplayed track in background
-      replenishTrack();
-    }
-
-    if (playlist.length === 0) {
-      setStatus('All tracks in this playlist have been guessed/played!', 'success');
-      alert('Playlist complete! No more tracks remaining.');
-      return;
-    }
-
-    // Pick a random song from the remaining pool
     currentTrack = playlist[Math.floor(Math.random() * playlist.length)];
     renderTimeline();
     updateBadge();
@@ -556,6 +530,9 @@
   }
 
   function seekToStart(audio) {
+    // Setting currentTime on streamed (non-fully-buffered) audio triggers an ASYNC seek.
+    // Calling play() immediately after can start playback before the seek finishes,
+    // resuming from the old position instead of true 0 -- this is the bug we're fixing.
     return new Promise((resolve) => {
       if (audio.currentTime === 0) {
         resolve();
@@ -567,6 +544,8 @@
         resolve();
       };
       audio.addEventListener('seeked', onSeeked);
+      // Safety net: some mobile browsers are inconsistent about firing 'seeked'
+      // when seeking to a value very close to the current one. Don't hang forever.
       const fallback = setTimeout(() => {
         audio.removeEventListener('seeked', onSeeked);
         resolve();
@@ -584,6 +563,7 @@
     await seekToStart(audioElement);
 
     audioElement.play().then(() => {
+      console.log(`Playing snippet: step ${currentStep}, duration ${duration}s, started at currentTime=${audioElement.currentTime.toFixed(3)}`);
       togglePlayIcon(true);
       stopTimer = setTimeout(() => {
         audioElement.pause();
