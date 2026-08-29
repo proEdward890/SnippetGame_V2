@@ -92,7 +92,7 @@
 <body>
 
 <div class="container">
-  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v10</div>
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v11</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -152,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console (build 2026-08-18-v10)</span>
+    <span>Debug Console (build 2026-08-18-v11)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -235,7 +235,7 @@
 
     // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
     renderAll();
-    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v10 ---');
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v11 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
@@ -250,11 +250,20 @@
   };
 
   let currentDiff = 'medium';
-  let playlist = [];
+  let playlist = [];          // ALL resolved playable tracks ever loaded this session (used for autocomplete search)
+  let availablePool = [];     // Subset of playlist NOT yet used this cycle -- rounds are drawn from here
+  let usedSpotifyIds = new Set();     // Spotify track IDs already played this cycle
+  let importedSpotifyIds = new Set(); // Spotify track IDs already fetched+resolved (prevents re-importing dupes)
+  let spotifyPlaylistId = null;
+  let spotifyItemsOffset = 0;
+  let spotifyItemsTotal = 0;
+  let isToppingUpPool = false; // prevents overlapping replenish fetches
   let currentTrack = null;
   let currentStep = 0;
   let stopTimer = null;
   const audioElement = document.getElementById('nativeAudio');
+  const PLAYLIST_PAGE_SIZE = 50; // Spotify's max per request for playlist items
+  const POOL_LOW_THRESHOLD = 5;  // background top-up triggers when pool drops below this
 
   function setStatus(msg, type = 'normal') {
     const el = document.getElementById('statusText');
@@ -470,11 +479,20 @@
     const playlistId = document.getElementById('userPlaylists').value;
     if (!playlistId) return;
 
+    // Reset all pool/session state for the newly selected playlist.
+    playlist = [];
+    availablePool = [];
+    usedSpotifyIds = new Set();
+    importedSpotifyIds = new Set();
+    spotifyPlaylistId = playlistId;
+    spotifyItemsOffset = 0;
+    spotifyItemsTotal = 0;
+
     const token = localStorage.getItem('spotify_token');
     setStatus('Extracting songs from Spotify...', 'loading');
 
     try {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=30`, {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=${PLAYLIST_PAGE_SIZE}&offset=0`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -501,42 +519,104 @@
         return;
       }
 
-      const queries = data.items
-        .filter(entry => entry && (entry.item || entry.track) && !entry.is_local)
-        .map(entry => {
-          const trackObj = entry.item || entry.track; // Spotify renamed 'track' -> 'item' (Feb 2026 migration)
-          const artistName = trackObj.artists && trackObj.artists[0] ? trackObj.artists[0].name : '';
-          return `${trackObj.name} ${artistName}`;
-        });
+      spotifyItemsOffset = data.items.length;
+      spotifyItemsTotal = typeof data.total === 'number' ? data.total : data.items.length;
+      console.log(`Playlist has ${spotifyItemsTotal} total items; fetched first ${spotifyItemsOffset}.`);
 
-      console.log(`Extracted ${queries.length} track queries out of ${data.items.length} items.`);
+      const descriptors = extractDescriptors(data.items);
+      console.log(`Extracted ${descriptors.length} track descriptors out of ${data.items.length} items.`);
 
-      if (queries.length === 0) {
+      if (descriptors.length === 0) {
         setStatus('No playable tracks found in this playlist (may be local files or missing metadata).', 'error');
         return;
       }
 
-      setStatus(`Found ${queries.length} tracks. Fetching audio clips...`, 'loading');
-      await resolveAudioForTracks(queries);
+      setStatus(`Found ${descriptors.length} tracks. Fetching audio clips...`, 'loading');
+      await resolveDescriptors(descriptors);
+
+      if (playlist.length > 0) {
+        setStatus(`Ready! Loaded ${playlist.length} playable songs.`, 'success');
+        nextRound();
+      } else {
+        setStatus('Unable to stream audio for these tracks.', 'error');
+      }
     } catch (e) {
       console.error('Exception in loadSelectedPlaylist:', e);
       setStatus(`Failed to load songs: ${e.message}`, 'error');
     }
   }
 
-  async function resolveAudioForTracks(queries) {
-    playlist = [];
-    let done = 0;
+  // Extracts {id, name, artist} descriptors from a batch of Spotify playlist items,
+  // skipping local files, malformed entries, and anything already imported before.
+  function extractDescriptors(items) {
+    return items
+      .filter(entry => entry && (entry.item || entry.track) && !entry.is_local)
+      .map(entry => {
+        const trackObj = entry.item || entry.track; // Spotify renamed 'track' -> 'item' (Feb 2026 migration)
+        const artistName = trackObj.artists && trackObj.artists[0] ? trackObj.artists[0].name : '';
+        return { id: trackObj.id, name: trackObj.name, artist: artistName };
+      })
+      .filter(desc => desc.id && !importedSpotifyIds.has(desc.id));
+  }
 
-    for (let q of queries) {
+  // Fetches the NEXT page of playlist items from Spotify (for pool replenishment) and
+  // resolves+appends any new, not-yet-imported tracks into playlist/availablePool.
+  // Returns true if any new tracks were added.
+  async function fetchMorePlaylistItems() {
+    if (!spotifyPlaylistId || spotifyItemsOffset >= spotifyItemsTotal) {
+      console.log('No more playlist items to fetch (offset >= total or no playlist selected).');
+      return false;
+    }
+
+    const token = localStorage.getItem('spotify_token');
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${spotifyPlaylistId}/items?limit=${PLAYLIST_PAGE_SIZE}&offset=${spotifyItemsOffset}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      console.log(`Top-up fetch: offset=${spotifyItemsOffset} -> HTTP ${res.status}`);
+      if (!res.ok) {
+        console.warn('Top-up fetch failed, will not retry this round.', res.status);
+        return false;
+      }
+      const data = await res.json();
+      if (!data.items || data.items.length === 0) {
+        spotifyItemsOffset = spotifyItemsTotal; // nothing left, stop trying
+        return false;
+      }
+      spotifyItemsOffset += data.items.length;
+
+      const descriptors = extractDescriptors(data.items);
+      console.log(`Top-up: found ${descriptors.length} new unique tracks in this batch.`);
+      if (descriptors.length === 0) return false;
+
+      const before = availablePool.length;
+      await resolveDescriptors(descriptors);
+      return availablePool.length > before;
+    } catch (e) {
+      console.warn('Top-up fetch exception:', e.message);
+      return false;
+    }
+  }
+
+  async function resolveDescriptors(descriptors) {
+    let done = 0;
+    const total = descriptors.length;
+    const startCount = playlist.length;
+
+    for (let desc of descriptors) {
+      importedSpotifyIds.add(desc.id); // mark as imported even if iTunes lookup fails, so we don't retry it forever
+      const q = `${desc.name} ${desc.artist}`;
       await new Promise(resolve => {
         const cbName = `itunes_cb_${Date.now()}_${Math.floor(Math.random()*1000)}`;
         window[cbName] = function(data) {
           if (data.results && data.results[0] && data.results[0].previewUrl) {
-            playlist.push(data.results[0]);
+            const track = data.results[0];
+            track.spotifyId = desc.id;
+            playlist.push(track);
+            availablePool.push(track);
           }
           done++;
-          setStatus(`Buffering audio: ${done}/${queries.length}`, 'loading');
+          setStatus(`Buffering audio: ${done}/${total}`, 'loading');
           delete window[cbName];
           script.remove();
           resolve();
@@ -549,12 +629,7 @@
       });
     }
 
-    if (playlist.length > 0) {
-      setStatus(`Ready! Loaded ${playlist.length} playable songs.`, 'success');
-      nextRound();
-    } else {
-      setStatus('Unable to stream audio for these tracks.', 'error');
-    }
+    console.log(`resolveDescriptors: added ${playlist.length - startCount} playable tracks (pool now ${availablePool.length}).`);
   }
 
   // --- GAME ENGINE ---
@@ -569,18 +644,46 @@
     updateBadge();
   }
 
-  function nextRound() {
+  async function nextRound() {
     if (playlist.length === 0) return;
+
+    // Pool empty: try to top up from the rest of the playlist before giving up.
+    if (availablePool.length === 0) {
+      setStatus('Finding more songs...', 'loading');
+      await fetchMorePlaylistItems();
+    }
+
+    // Still empty after trying to fetch more -> we've genuinely played every unique
+    // song in this playlist. Recycle the full set so the game can keep going.
+    if (availablePool.length === 0) {
+      console.log('Playlist exhausted -- recycling all songs for a new cycle.');
+      availablePool = playlist.slice();
+      usedSpotifyIds.clear();
+      setStatus("You've heard every song in this playlist! Starting over.", 'success');
+    }
+
     document.getElementById('resultCard').style.display = 'none';
     document.getElementById('guessInput').value = '';
     currentStep = 0;
 
-    currentTrack = playlist[Math.floor(Math.random() * playlist.length)];
+    const index = Math.floor(Math.random() * availablePool.length);
+    currentTrack = availablePool[index];
+    availablePool.splice(index, 1);
+    if (currentTrack.spotifyId) usedSpotifyIds.add(currentTrack.spotifyId);
+    console.log(`nextRound: picked "${currentTrack.trackName}" (pool remaining: ${availablePool.length}, used: ${usedSpotifyIds.size})`);
+
     renderTimeline();
     updateBadge();
 
     audioElement.src = currentTrack.previewUrl;
     audioElement.load();
+
+    // Quietly top up in the background if the pool is getting low and more songs remain,
+    // so future rounds don't have to wait on a fetch.
+    if (availablePool.length < POOL_LOW_THRESHOLD && spotifyItemsOffset < spotifyItemsTotal && !isToppingUpPool) {
+      isToppingUpPool = true;
+      fetchMorePlaylistItems().finally(() => { isToppingUpPool = false; });
+    }
   }
 
   function renderTimeline() {
