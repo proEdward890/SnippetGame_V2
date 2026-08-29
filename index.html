@@ -92,7 +92,7 @@
 <body>
 
 <div class="container">
-  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v8</div>
+  <div style="text-align:center; font-size:10px; color:#555; font-family:monospace;">BUILD 2026-08-18-v9</div>
   <!-- Spotify Auth & Dropdown -->
   <div class="auth-section">
     <button id="loginBtn" class="spotify-btn" onclick="loginWithSpotify()">
@@ -152,7 +152,7 @@
 <button id="debugToggle" onclick="toggleDebugPanel()">DBG</button>
 <div id="debugPanel">
   <div id="debugHeader">
-    <span>Debug Console (build 2026-08-18-v8)</span>
+    <span>Debug Console (build 2026-08-18-v9)</span>
     <div>
       <button onclick="clearDebugLog()">Clear</button>
       <button onclick="toggleDebugPanel()">Close</button>
@@ -235,7 +235,7 @@
 
     // Restore any entries logged before this page load (e.g. right before the Spotify redirect)
     renderAll();
-    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v8 ---');
+    console.log('--- Page (re)loaded. BUILD_TAG=2026-08-18-v9 ---');
   })();
 
   const CLIENT_ID = 'ff934975e25146278bc4fe68a86b7375';
@@ -287,7 +287,7 @@
       client_id: CLIENT_ID,
       response_type: 'code',
       redirect_uri: REDIRECT_URI,
-      scope: 'playlist-read-private playlist-read-collaborative user-library-read',
+      scope: 'playlist-read-private playlist-read-collaborative user-library-read user-read-recently-played',
       code_challenge_method: 'S256',
       code_challenge: challenge
     });
@@ -375,8 +375,10 @@
         console.log('Sample playlist item:', JSON.stringify(validItems[0]));
       }
 
-      if (validItems.length > 0) {
-        validItems.forEach(p => {
+      const orderedItems = await prioritizeByRecentlyPlayed(validItems, token);
+
+      if (orderedItems.length > 0) {
+        orderedItems.forEach(p => {
           const opt = document.createElement('option');
           opt.value = p.id;
           const tracksInfo = p.items || p.tracks; // Spotify renamed 'tracks' -> 'items' for newer apps
@@ -391,6 +393,56 @@
     } catch (err) {
       console.error('Network/parse error fetching playlists:', err);
       setStatus(`Could not fetch playlists: ${err.message}`, 'error');
+    }
+  }
+
+  // Reorders playlists so ones the user has recently listened to appear first.
+  // Falls back silently to the original order if recently-played can't be fetched
+  // (e.g. old token missing the scope, or nothing played recently).
+  async function prioritizeByRecentlyPlayed(items, token) {
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=50', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!res.ok) {
+        console.warn(`Recently-played fetch skipped: HTTP ${res.status} (likely missing scope on an old token). Using default order.`);
+        return items;
+      }
+
+      const data = await res.json();
+      console.log('Raw recently-played response:', JSON.stringify(data).slice(0, 1500));
+
+      // Build an ordered, deduped list of playlist IDs from most-to-least recently played.
+      const recentPlaylistIds = [];
+      const seen = new Set();
+      for (const entry of (data.items || [])) {
+        const ctx = entry.context;
+        if (ctx && ctx.type === 'playlist' && ctx.uri) {
+          const id = ctx.uri.split(':').pop();
+          if (!seen.has(id)) {
+            seen.add(id);
+            recentPlaylistIds.push(id);
+          }
+        }
+      }
+
+      console.log(`Found ${recentPlaylistIds.length} distinct recently-played playlists.`);
+      if (recentPlaylistIds.length === 0) return items;
+
+      const itemsById = new Map(items.map(p => [p.id, p]));
+      const prioritized = [];
+      recentPlaylistIds.forEach(id => {
+        if (itemsById.has(id)) {
+          prioritized.push(itemsById.get(id));
+          itemsById.delete(id);
+        }
+      });
+      const remaining = items.filter(p => itemsById.has(p.id));
+      return [...prioritized, ...remaining];
+    } catch (err) {
+      console.warn('Recently-played prioritization failed, using default order:', err.message);
+      return items;
     }
   }
 
